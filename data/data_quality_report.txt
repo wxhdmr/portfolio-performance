@@ -1,0 +1,35 @@
+Report generated    : 2026-04-22
+Ticker              : SPY
+Requested window    : 2024-04-22 → 2026-04-22
+
+============================================================
+DATA QUALITY REPORT
+============================================================
+Raw rows downloaded : 501
+Date range          : 2024-04-22 → 2026-04-21
+Columns             : [('Close', 'SPY'), ('High', 'SPY'), ('Low', 'SPY'), ('Open', 'SPY'), ('Volume', 'SPY')]
+[fix] Flattened MultiIndex columns.
+
+[check] Missing business days (expected = holidays): 21
+        First 10: ['2024-05-27', '2024-06-19', '2024-07-04', '2024-09-02', '2024-11-28', '2024-12-25', '2025-01-01', '2025-01-09', '2025-01-20', '2025-02-17']
+
+[check] Duplicate index entries: 0
+
+[check] NaN values in Close: 0
+
+[check] Prices below $1.0: 0
+
+[check] Single-day moves > ±15%: 0
+
+--- Summary statistics on clean Close ---
+count    501.000000
+mean     600.652603
+std       58.740663
+min      487.847260
+25%      552.062927
+50%      591.361572
+75%      658.929993
+max      710.140015
+
+[result] Clean rows: 501
+============================================================
