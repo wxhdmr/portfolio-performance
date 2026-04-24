@@ -209,19 +209,26 @@ def compute_sector_data(
     })
     sector_ret.index.name = "Date"
 
-    # Summary: count, index weight (equal), cumulative return
+    # Summary: count, index weight, cumulative return, annualised volatility
     total_stocks = sum(len(v) for v in sector_groups.values())
     summary_rows = []
     for sector, tickers in sorted(sector_groups.items()):
-        cum_ret = (1 + sector_ret[sector].dropna()).prod() - 1
+        s = sector_ret[sector].dropna()
+        cum_ret  = (1 + s).prod() - 1
+        ann_vol  = s.std() * (252 ** 0.5)        # annualised daily vol
+        ann_ret  = (1 + cum_ret) ** (252 / len(s)) - 1  # annualised return
+        sharpe   = ann_ret / ann_vol if ann_vol > 0 else 0
         summary_rows.append({
-            "sector":           sector,
-            "n_stocks":         len(tickers),
-            "index_weight_%":   round(len(tickers) / total_stocks * 100, 2),
-            "cumulative_ret_%": round(cum_ret * 100, 2),
+            "sector":             sector,
+            "n_stocks":           len(tickers),
+            "index_weight_%":     round(len(tickers) / total_stocks * 100, 2),
+            "cumulative_ret_%":   round(cum_ret * 100, 2),
+            "ann_return_%":       round(ann_ret * 100, 2),
+            "ann_volatility_%":   round(ann_vol * 100, 2),
+            "sharpe_ratio":       round(sharpe, 2),
         })
     sector_summary = pd.DataFrame(summary_rows).sort_values(
-        "cumulative_ret_%", ascending=False
+        "ann_volatility_%", ascending=True
     )
 
     return sector_ret, sector_summary
@@ -261,10 +268,15 @@ def save(prices: pd.DataFrame, constituents: pd.DataFrame) -> None:
     sector_summary.to_csv(sector_sum_path, index=False)
     print(f"Saved sector breakdown     → {sector_sum_path}")
 
-    print("\n  Sector performance (equal-weight, 2yr cumulative):")
+    print("\n  Sector risk/return (equal-weight, annualised):")
+    print(f"    {'Sector':<45s} {'Ann Ret':>8} {'Ann Vol':>8} {'Sharpe':>7}  Stocks")
+    print(f"    {'-'*45} {'-'*8} {'-'*8} {'-'*7}  ------")
     for _, row in sector_summary.iterrows():
-        print(f"    {row['sector']:<45s} {row['cumulative_ret_%']:>+7.1f}%  "
-              f"({int(row['n_stocks'])} stocks)")
+        print(f"    {row['sector']:<45s} "
+              f"{row['ann_return_%']:>+7.1f}% "
+              f"{row['ann_volatility_%']:>7.1f}% "
+              f"{row['sharpe_ratio']:>7.2f}  "
+              f"{int(row['n_stocks'])}")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────

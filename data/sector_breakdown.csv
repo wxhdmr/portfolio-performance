@@ -1,12 +1,12 @@
-sector,n_stocks,index_weight_%,cumulative_ret_%
-Information Technology,71,14.17,74.74
-Communication Services,23,4.59,62.27
-Utilities,31,6.19,54.06
-Industrials,79,15.77,45.7
-Energy,22,4.39,39.08
-Financials,76,15.17,35.44
-Consumer Discretionary,48,9.58,34.54
-Materials,26,5.19,28.94
-Real Estate,31,6.19,20.09
-Health Care,58,11.58,7.98
-Consumer Staples,36,7.19,0.51
+sector,n_stocks,index_weight_%,cumulative_ret_%,ann_return_%,ann_volatility_%,sharpe_ratio
+Consumer Staples,36,7.19,0.51,0.26,13.9,0.02
+Utilities,31,6.19,54.06,24.34,15.24,1.6
+Health Care,58,11.58,7.98,3.95,16.22,0.24
+Real Estate,31,6.19,20.09,9.67,16.54,0.58
+Communication Services,23,4.59,62.27,27.63,16.89,1.64
+Industrials,79,15.77,45.7,20.89,18.4,1.14
+Financials,76,15.17,35.44,16.52,18.89,0.87
+Materials,26,5.19,28.94,13.67,19.47,0.7
+Consumer Discretionary,48,9.58,34.54,16.13,20.3,0.79
+Energy,22,4.39,39.08,18.09,24.61,0.74
+Information Technology,71,14.17,74.74,32.48,25.58,1.27
