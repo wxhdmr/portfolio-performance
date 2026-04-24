@@ -13,8 +13,6 @@ data/constituents.csv           — ticker / company / sector metadata
 data/constituents_quality_report.txt
 """
 
-import sys
-import time
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -54,6 +52,12 @@ def fetch_constituent_list() -> pd.DataFrame:
     df["ticker"] = df["ticker"].str.replace(".", "-", regex=False)
 
     print(f"  Found {len(df)} constituents.")
+
+    sector_counts = df["sector"].value_counts()
+    print("\n  Sector breakdown:")
+    for sector, count in sector_counts.items():
+        print(f"    {sector:<45s} {count:>3d} stocks  ({count/len(df)*100:.1f}%)")
+
     return df
 
 
@@ -173,7 +177,57 @@ def quality_check(prices: pd.DataFrame, report: list[str]) -> pd.DataFrame:
     return prices
 
 
-# ── Step 4: save ──────────────────────────────────────────────────────────────
+# ── Step 4: sector returns ───────────────────────────────────────────────────
+
+def compute_sector_data(
+    prices: pd.DataFrame, constituents: pd.DataFrame
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Compute equal-weight daily returns per GICS sector and a sector summary.
+
+    Returns
+    -------
+    sector_returns  : Date × Sector DataFrame of daily equal-weight returns
+    sector_summary  : one row per sector with stock count, weight, and
+                      cumulative return over the full period
+    """
+    # Map ticker → sector (exclude SPY)
+    ticker_sector = constituents.set_index("ticker")["sector"].to_dict()
+
+    daily_returns = prices.drop(columns=["SPY"], errors="ignore").pct_change()
+
+    sector_groups: dict[str, list[str]] = {}
+    for ticker in daily_returns.columns:
+        sector = ticker_sector.get(ticker)
+        if sector and sector != "ETF":
+            sector_groups.setdefault(sector, []).append(ticker)
+
+    # Equal-weight average return per sector per day
+    sector_ret = pd.DataFrame({
+        sector: daily_returns[tickers].mean(axis=1)
+        for sector, tickers in sector_groups.items()
+    })
+    sector_ret.index.name = "Date"
+
+    # Summary: count, index weight (equal), cumulative return
+    total_stocks = sum(len(v) for v in sector_groups.values())
+    summary_rows = []
+    for sector, tickers in sorted(sector_groups.items()):
+        cum_ret = (1 + sector_ret[sector].dropna()).prod() - 1
+        summary_rows.append({
+            "sector":           sector,
+            "n_stocks":         len(tickers),
+            "index_weight_%":   round(len(tickers) / total_stocks * 100, 2),
+            "cumulative_ret_%": round(cum_ret * 100, 2),
+        })
+    sector_summary = pd.DataFrame(summary_rows).sort_values(
+        "cumulative_ret_%", ascending=False
+    )
+
+    return sector_ret, sector_summary
+
+
+# ── Step 5: save ──────────────────────────────────────────────────────────────
 
 def save(prices: pd.DataFrame, constituents: pd.DataFrame) -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -196,6 +250,21 @@ def save(prices: pd.DataFrame, constituents: pd.DataFrame) -> None:
     constituents_out = pd.concat([spy_row, constituents_out], ignore_index=True)
     constituents_out.to_csv(const_path, index=False)
     print(f"Saved constituent metadata → {const_path}")
+
+    sector_ret, sector_summary = compute_sector_data(prices, constituents_out)
+
+    sector_ret_path = OUTPUT_DIR / "sector_returns.csv"
+    sector_ret.to_csv(sector_ret_path)
+    print(f"Saved sector returns       → {sector_ret_path}")
+
+    sector_sum_path = OUTPUT_DIR / "sector_breakdown.csv"
+    sector_summary.to_csv(sector_sum_path, index=False)
+    print(f"Saved sector breakdown     → {sector_sum_path}")
+
+    print("\n  Sector performance (equal-weight, 2yr cumulative):")
+    for _, row in sector_summary.iterrows():
+        print(f"    {row['sector']:<45s} {row['cumulative_ret_%']:>+7.1f}%  "
+              f"({int(row['n_stocks'])} stocks)")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
