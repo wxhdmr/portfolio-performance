@@ -1,0 +1,12 @@
+sector,portfolio_wt_%,n_stocks,sector_ret_2yr%,contribution_%,best_stock,worst_stock
+Information Technology,28.13,57,71.0,19.96,WDC (+673%),ENPH (-67%)
+Communication Services,8.91,20,74.9,6.67,WBD (+227%),CHTR (-30%)
+Consumer Discretionary,10.15,49,39.9,4.05,TPR (+286%),LULU (-60%)
+Financials,12.21,62,32.7,3.99,BK (+144%),FISV (-60%)
+Industrials,8.16,71,35.8,2.92,HWM (+276%),RHI (-60%)
+Consumer Staples,5.86,35,21.9,1.28,WMT (+120%),CPB (-50%)
+Energy,3.68,20,27.0,0.99,BKR (+116%),OXY (-13%)
+Utilities,2.2,30,44.6,0.98,NRG (+127%),AES (-6%)
+Health Care,11.99,59,7.6,0.91,GILD (+113%),XRAY (-58%)
+Real Estate,2.27,31,29.8,0.68,WELL (+131%),CSGP (-60%)
+Materials,1.74,24,26.3,0.46,NEM (+188%),FMC (-72%)
