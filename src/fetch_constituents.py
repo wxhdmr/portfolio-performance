@@ -3,13 +3,17 @@ Fetch 2 years of daily closing prices for SPY + all S&P 500 constituents.
 
 Data sources
 ------------
-- Constituent list : Wikipedia "List of S&P 500 companies"
-- Prices           : Yahoo Finance via yfinance (auto-adjusted closes)
+- Current constituent list : Wikipedia "List of S&P 500 companies"
+- Historical members       : SEC EDGAR NPORT-P quarterly filings (via data/sp500_weights/)
+- Prices                   : Yahoo Finance via yfinance (auto-adjusted closes)
+
+The universe is the union of current Wikipedia constituents and all tickers that
+appeared in any NPORT-P filing over the past 2 years, removing survivorship bias.
 
 Output
 ------
-data/sp500_closing_prices.csv   — Date × Ticker wide table
-data/constituents.csv           — ticker / company / sector metadata
+data/sp500_closing_prices.csv   — Date × Ticker wide table (current + historical)
+data/constituents.csv           — ticker / company / sector / status metadata
 data/constituents_quality_report.txt
 """
 
@@ -23,8 +27,9 @@ import yfinance as yf
 # ── Config ────────────────────────────────────────────────────────────────────
 END_DATE   = date.today()
 START_DATE = END_DATE - timedelta(days=2 * 365)
-OUTPUT_DIR = Path(__file__).parent.parent / "data"
-WIKI_URL   = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+OUTPUT_DIR   = Path(__file__).parent.parent / "data"
+WEIGHTS_DIR  = OUTPUT_DIR / "sp500_weights"
+WIKI_URL     = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
 
 # Quality thresholds
 MAX_DAILY_MOVE_PCT   = 0.20   # flag moves > ±20 % (looser for individual stocks)
@@ -59,6 +64,74 @@ def fetch_constituent_list() -> pd.DataFrame:
         print(f"    {sector:<45s} {count:>3d} stocks  ({count/len(df)*100:.1f}%)")
 
     return df
+
+
+# ── Step 1b: historical tickers from NPORT-P filings ─────────────────────────
+
+def load_nport_tickers() -> dict[str, list[str]]:
+    """
+    Read all quarterly weight CSVs and return {yf_ticker: [quarter_dates]}.
+    Normalises NPORT ticker formats to Yahoo Finance style:
+      BRK/B → BRK-B,  BF/B → BF-B  (slash → hyphen)
+    """
+    if not WEIGHTS_DIR.exists():
+        print("  No NPORT weight files found — skipping historical tickers.")
+        return {}
+
+    ticker_quarters: dict[str, list[str]] = {}
+    for f in sorted(WEIGHTS_DIR.glob("*.csv")):
+        df = pd.read_csv(f)
+        for raw_ticker in df["ticker"].tolist():
+            yf_ticker = raw_ticker.replace("/", "-").replace(".", "-")
+            ticker_quarters.setdefault(yf_ticker, []).append(f.stem)
+
+    print(f"  {len(ticker_quarters)} unique tickers found across all NPORT quarters")
+    return ticker_quarters
+
+
+_YF_TO_GICS = {
+    "Healthcare":          "Health Care",
+    "Financial Services":  "Financials",
+    "Consumer Cyclical":   "Consumer Discretionary",
+    "Technology":          "Information Technology",
+    "Basic Materials":     "Materials",
+    "Consumer Defensive":  "Consumer Staples",
+    "Communication Services": "Communication Services",
+    "Industrials":         "Industrials",
+    "Energy":              "Energy",
+    "Real Estate":         "Real Estate",
+    "Utilities":           "Utilities",
+}
+
+
+def fetch_historical_sector_info(tickers: list[str]) -> pd.DataFrame:
+    """
+    Fetch sector/company info from yfinance for tickers not in Wikipedia.
+    Normalises yfinance sector names to GICS equivalents.
+    Falls back to 'Unknown' if yfinance has no info.
+    """
+    rows = []
+    for ticker in tickers:
+        try:
+            info = yf.Ticker(ticker).info
+            yf_sector = info.get("sector", "Unknown")
+            gics_sector = _YF_TO_GICS.get(yf_sector, yf_sector)
+            rows.append({
+                "ticker":       ticker,
+                "company":      info.get("longName", ticker),
+                "sector":       gics_sector,
+                "sub_industry": info.get("industry", "Unknown"),
+                "status":       "historical",
+            })
+        except Exception:
+            rows.append({
+                "ticker":       ticker,
+                "company":      ticker,
+                "sector":       "Unknown",
+                "sub_industry": "Unknown",
+                "status":       "historical",
+            })
+    return pd.DataFrame(rows)
 
 
 # ── Step 2: batch price download ──────────────────────────────────────────────
@@ -199,7 +272,7 @@ def compute_sector_data(
     sector_groups: dict[str, list[str]] = {}
     for ticker in daily_returns.columns:
         sector = ticker_sector.get(ticker)
-        if sector and sector != "ETF":
+        if sector and sector not in ("ETF", "Unknown"):
             sector_groups.setdefault(sector, []).append(ticker)
 
     # Equal-weight average return per sector per day
@@ -248,15 +321,18 @@ def save(prices: pd.DataFrame, constituents: pd.DataFrame) -> None:
     const_path = OUTPUT_DIR / "constituents.csv"
     # Keep only tickers that survived quality checks
     surviving = set(prices.columns)
-    constituents_out = constituents[constituents["ticker"].isin(surviving)]
+    constituents_out = constituents[constituents["ticker"].isin(surviving)].copy()
     # Add SPY row
     spy_row = pd.DataFrame([{
         "ticker": "SPY", "company": "SPDR S&P 500 ETF Trust",
-        "sector": "ETF", "sub_industry": "ETF",
+        "sector": "ETF", "sub_industry": "ETF", "status": "etf",
     }])
     constituents_out = pd.concat([spy_row, constituents_out], ignore_index=True)
+    n_current = (constituents_out["status"] == "current").sum()
+    n_hist    = (constituents_out["status"] == "historical").sum()
     constituents_out.to_csv(const_path, index=False)
-    print(f"Saved constituent metadata → {const_path}")
+    print(f"Saved constituent metadata → {const_path}  "
+          f"({n_current} current + {n_hist} historical)")
 
     sector_ret, sector_summary = compute_sector_data(prices, constituents_out)
 
@@ -282,18 +358,44 @@ def save(prices: pd.DataFrame, constituents: pd.DataFrame) -> None:
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main() -> None:
+    # Current constituents (Wikipedia) — tagged "current"
     constituents = fetch_constituent_list()
-    tickers = constituents["ticker"].tolist()
+    constituents["status"] = "current"
+    current_tickers = set(constituents["ticker"].tolist())
 
-    raw = download_prices(tickers)
-    prices = extract_close(raw, tickers)
+    # Historical tickers from NPORT-P filings
+    print("\nLoading historical NPORT-P tickers …")
+    nport_map = load_nport_tickers()
+    nport_tickers = set(nport_map.keys())
+
+    # Historical-only tickers: in NPORT but not current Wikipedia list
+    historical_only = sorted(nport_tickers - current_tickers)
+    print(f"  Historical-only tickers (removed from index): {len(historical_only)}")
+    print(f"  {historical_only}")
+
+    if historical_only:
+        print(f"\nFetching sector info for {len(historical_only)} historical tickers …")
+        hist_df = fetch_historical_sector_info(historical_only)
+        all_constituents = pd.concat([constituents, hist_df], ignore_index=True)
+    else:
+        all_constituents = constituents.copy()
+
+    # Full universe = current + historical
+    all_tickers = sorted(current_tickers | nport_tickers)
+    print(f"\nFull universe: {len(all_tickers)} tickers "
+          f"({len(current_tickers)} current + {len(historical_only)} historical-only)")
+
+    raw = download_prices(all_tickers)
+    prices = extract_close(raw, all_tickers)
 
     report: list[str] = [
         f"Report generated : {date.today()}",
         f"Requested window : {START_DATE} → {END_DATE}",
+        f"Universe         : {len(all_tickers)} tickers "
+        f"({len(current_tickers)} current + {len(historical_only)} historical-only)",
     ]
     prices = quality_check(prices, report)
-    save(prices, constituents)
+    save(prices, all_constituents)
 
     report_path = OUTPUT_DIR / "constituents_quality_report.txt"
     report_path.write_text("\n".join(report), encoding="utf-8")

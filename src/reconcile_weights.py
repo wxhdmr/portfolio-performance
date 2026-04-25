@@ -44,13 +44,18 @@ def load_quarterly_weights() -> pd.DataFrame:
     """
     Load all per-quarter weight CSVs from data/sp500_weights/.
     Returns a wide DataFrame indexed by quarter-end date.
+    Normalises ticker formats to match Yahoo Finance (BRK/B → BRK-B).
     """
     weight_dir = DATA_DIR / "sp500_weights"
     frames = {}
     for f in sorted(weight_dir.glob("*.csv")):
         qdate = pd.Timestamp(f.stem).date()
-        df    = pd.read_csv(f).set_index("ticker")["weight_%"]
-        frames[qdate] = df
+        df    = pd.read_csv(f)
+        df["ticker"] = df["ticker"].str.replace("/", "-", regex=False) \
+                                   .str.replace(".", "-", regex=False)
+        s = df.set_index("ticker")["weight_%"]
+        # Sum duplicate tickers (e.g. after normalisation BRK/B and BRK-B map to same)
+        frames[qdate] = s.groupby(level=0).sum()
 
     wide = pd.DataFrame(frames).T          # shape: quarters × tickers
     wide.index = pd.to_datetime(wide.index)
