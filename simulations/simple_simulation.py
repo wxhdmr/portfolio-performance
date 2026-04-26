@@ -38,7 +38,7 @@ DATA_DIR = Path(__file__).parent.parent / "data"
 
 
 def simulate_return_with_TE_ER(
-    spy_close: pd.Series,
+    spy_closing_prices: pd.DataFrame | pd.Series,
     target_annual_te: float,
     target_annual_er: float,
     annual_fee: float = 0.0009,
@@ -51,9 +51,11 @@ def simulate_return_with_TE_ER(
 
     Parameters
     ----------
-    spy_close : pd.Series
-        SPY daily closing prices (DatetimeIndex).  Starting value is shared
-        with the output series so both can be compared on the same scale.
+    spy_closing_prices : pd.DataFrame or pd.Series
+        Either the full closing-prices DataFrame (with a "SPY" column, as
+        loaded directly from sp500_closing_prices.csv) or just the SPY
+        column as a Series.  The DatetimeIndex is used as the simulation
+        calendar; the starting value is shared with the output series.
     target_annual_te : float
         Target annualised tracking error, e.g. 0.017 for 1.7%.
     target_annual_er : float
@@ -70,12 +72,17 @@ def simulate_return_with_TE_ER(
     -------
     pd.Series
         Simulated portfolio daily closing prices with the same DatetimeIndex
-        and starting value as spy_close.
+        and starting value as the SPY input.
     """
+    if isinstance(spy_closing_prices, pd.DataFrame):
+        spy_close = spy_closing_prices["SPY"]
+    else:
+        spy_close = spy_closing_prices
+
     spy_close = spy_close.dropna()
     n = len(spy_close)
     if n < 2:
-        raise ValueError("spy_close must have at least 2 observations")
+        raise ValueError("spy_closing_prices must have at least 2 observations")
 
     # ── Daily parameter targets ────────────────────────────────────────────────
     daily_te          = target_annual_te / np.sqrt(252)
@@ -412,17 +419,18 @@ if __name__ == "__main__":
     prices = pd.read_csv(
         DATA_DIR / "sp500_closing_prices.csv",
         index_col=0, parse_dates=True)
-    spy = prices["SPY"]
 
     ANNUAL_FEE = 0.0009
 
+    # Pass the full DataFrame — SPY column is extracted automatically
     port = simulate_return_with_TE_ER(
-        spy_close        = spy,
-        target_annual_te = 0.017,      # 1.7% tracking error
-        target_annual_er = 0.020,      # +2.0% net excess return
-        annual_fee       = ANNUAL_FEE,
+        spy_closing_prices = prices,
+        target_annual_te   = 0.017,    # 1.7% tracking error
+        target_annual_er   = 0.020,    # +2.0% net excess return
+        annual_fee         = ANNUAL_FEE,
     )
 
+    spy = prices["SPY"]
     print()
     stats = validate(port, spy, annual_fee=ANNUAL_FEE)
 
