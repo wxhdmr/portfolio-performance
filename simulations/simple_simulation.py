@@ -42,6 +42,8 @@ def simulate_return_with_TE_ER(
     target_annual_te: float,
     target_annual_er: float,
     annual_fee: float = 0.0009,
+    initial_value: float | None = None,
+    tolerance: float = 1e-4,
     output_path: str | Path | None = None,
     random_seed: int = 42,
 ) -> pd.Series:
@@ -55,7 +57,7 @@ def simulate_return_with_TE_ER(
         Either the full closing-prices DataFrame (with a "SPY" column, as
         loaded directly from sp500_closing_prices.csv) or just the SPY
         column as a Series.  The DatetimeIndex is used as the simulation
-        calendar; the starting value is shared with the output series.
+        calendar.
     target_annual_te : float
         Target annualised tracking error, e.g. 0.017 for 1.7%.
     target_annual_er : float
@@ -63,6 +65,13 @@ def simulate_return_with_TE_ER(
         e.g. 0.02 for +2.0%.
     annual_fee : float
         Annual management fee rate (default 0.09% = 0.0009).
+    initial_value : float or None
+        Starting value for both the portfolio and the SPY reference series.
+        If None, defaults to the raw SPY price on day 1.
+    tolerance : float
+        Maximum allowed deviation between target and achieved TE / ER.
+        Raises ValueError if either metric falls outside the tolerance.
+        Default 1e-4 (0.01 pp).
     output_path : str | Path | None
         Destination CSV.  Defaults to data/simple_simulation.csv.
     random_seed : int
@@ -71,8 +80,7 @@ def simulate_return_with_TE_ER(
     Returns
     -------
     pd.Series
-        Simulated portfolio daily closing prices with the same DatetimeIndex
-        and starting value as the SPY input.
+        Simulated portfolio daily closing prices (starting at initial_value).
     """
     if isinstance(spy_closing_prices, pd.DataFrame):
         spy_close = spy_closing_prices["SPY"]
@@ -84,34 +92,52 @@ def simulate_return_with_TE_ER(
     if n < 2:
         raise ValueError("spy_closing_prices must have at least 2 observations")
 
+    # ── Starting value for both series ────────────────────────────────────────
+    start_val = float(initial_value) if initial_value is not None \
+                else float(spy_close.iloc[0])
+
+    # Scale SPY to start at start_val (returns are unchanged)
+    spy_scaled = spy_close / float(spy_close.iloc[0]) * start_val
+
     # ── Daily parameter targets ────────────────────────────────────────────────
     daily_te          = target_annual_te / np.sqrt(252)
     daily_fee         = annual_fee / 252
-    # Gross alpha must cover the fee so that net ER = target_annual_er
     daily_gross_alpha = (target_annual_er + annual_fee) / 252
 
     # ── Alpha: white noise rescaled to exact TE and mean ──────────────────────
     rng   = np.random.default_rng(random_seed)
     noise = rng.standard_normal(n - 1)
-    noise = noise - noise.mean()                    # exact zero mean
-    noise = noise / noise.std(ddof=1) * daily_te   # exact daily TE (ddof=1 matches pandas)
-    alpha = noise + daily_gross_alpha         # shift to target gross alpha
+    noise = noise - noise.mean()
+    noise = noise / noise.std(ddof=1) * daily_te
+    alpha = noise + daily_gross_alpha
 
     # ── SPY and portfolio daily returns ───────────────────────────────────────
-    spy_ret  = spy_close.pct_change().iloc[1:].values   # shape (n-1,)
-    port_ret = spy_ret + alpha - daily_fee               # net of fee
+    spy_ret  = spy_close.pct_change().iloc[1:].values
+    port_ret = spy_ret + alpha - daily_fee
 
-    # ── Compound into a closing-price series starting at spy_close.iloc[0] ───
+    # ── Compound into a closing-price series starting at start_val ───────────
     nav    = np.empty(n)
-    nav[0] = float(spy_close.iloc[0])
+    nav[0] = start_val
     for i, r in enumerate(port_ret):
         nav[i + 1] = nav[i] * (1.0 + r)
     port_close = pd.Series(nav, index=spy_close.index, name="port_close")
 
-    # ── Verify achieved metrics ────────────────────────────────────────────────
+    # ── Achieved metrics ──────────────────────────────────────────────────────
     active_ret = pd.Series(port_ret - spy_ret, index=spy_close.index[1:])
     ach_te     = float(active_ret.std() * np.sqrt(252))
     ach_er_net = float(active_ret.mean() * 252)
+
+    # ── Auto-validate against tolerance ──────────────────────────────────────
+    te_diff = abs(ach_te - target_annual_te)
+    er_diff = abs(ach_er_net - target_annual_er)
+    if te_diff > tolerance:
+        raise ValueError(
+            "Achieved TE {:.6f} deviates from target {:.6f} by {:.2e} "
+            "(tolerance {:.2e})".format(ach_te, target_annual_te, te_diff, tolerance))
+    if er_diff > tolerance:
+        raise ValueError(
+            "Achieved ER {:.6f} deviates from target {:.6f} by {:.2e} "
+            "(tolerance {:.2e})".format(ach_er_net, target_annual_er, er_diff, tolerance))
 
     print("=" * 56)
     print("  Simulated Portfolio vs SPY")
@@ -119,13 +145,13 @@ def simulate_return_with_TE_ER(
     print("  Period         : {} → {}".format(
           spy_close.index[0].date(), spy_close.index[-1].date()))
     print("  Trading days   : {}".format(n))
-    print("  Target TE      : {:>8.4f}%   achieved {:>8.4f}%".format(
+    print("  Target TE      : {:>8.4f}%   achieved {:>8.4f}%  [OK]".format(
           target_annual_te * 100, ach_te * 100))
-    print("  Target ER(net) : {:>+8.4f}%   achieved {:>+8.4f}%".format(
+    print("  Target ER(net) : {:>+8.4f}%   achieved {:>+8.4f}%  [OK]".format(
           target_annual_er * 100, ach_er_net * 100))
     print("  Annual fee     : {:>8.4f}%".format(annual_fee * 100))
-    print("  Starting value : ${:>12,.4f}".format(float(spy_close.iloc[0])))
-    print("  Final SPY      : ${:>12,.4f}".format(float(spy_close.iloc[-1])))
+    print("  Starting value : ${:>12,.4f}".format(start_val))
+    print("  Final SPY      : ${:>12,.4f}".format(float(spy_scaled.iloc[-1])))
     print("  Final Port     : ${:>12,.4f}".format(float(port_close.iloc[-1])))
 
     # ── Save CSV ───────────────────────────────────────────────────────────────
@@ -137,7 +163,7 @@ def simulate_return_with_TE_ER(
     active_ret_full = np.concatenate([[np.nan], active_ret.values])
 
     out = pd.DataFrame({
-        "spy_close":  spy_close,
+        "spy_close":  spy_scaled,
         "port_close": port_close,
         "spy_ret":    spy_close.pct_change(),
         "port_ret":   pd.Series(port_ret_full,   index=spy_close.index),
@@ -425,12 +451,15 @@ if __name__ == "__main__":
     # Pass the full DataFrame — SPY column is extracted automatically
     port = simulate_return_with_TE_ER(
         spy_closing_prices = prices,
-        target_annual_te   = 0.017,    # 1.7% tracking error
-        target_annual_er   = 0.020,    # +2.0% net excess return
+        target_annual_te   = 0.02,    # 2.0% tracking error
+        target_annual_er   = 0.01,    # +1.0% net excess return
         annual_fee         = ANNUAL_FEE,
+        initial_value      = 100_000,  # both SPY and portfolio start at $100k
+        tolerance          = 1e-4,
     )
 
     spy = prices["SPY"]
+    spy = spy / float(spy.iloc[0]) * 100_000   # scale SPY to match initial_value
     print()
     stats = validate(port, spy, annual_fee=ANNUAL_FEE)
 
