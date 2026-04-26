@@ -109,6 +109,34 @@ class FrecAccount:
 
     # ── Simulation ────────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _rebalance(
+        positions: dict,
+        cash: float,
+        prices: pd.DataFrame,
+        day: pd.Timestamp,
+        new_total: float,
+    ) -> tuple[dict, float]:
+        """
+        Redistribute new_total across current holdings in proportion to their
+        current market values (cash included).  Returns (new_positions, new_cash).
+        """
+        mkt = {t: float(prices.loc[day, t]) * s
+               for t, s in positions.items() if t in prices.columns}
+        old_total = sum(mkt.values()) + cash
+
+        if old_total <= 1e-6:
+            return {}, new_total
+
+        new_positions = {}
+        for t, val in mkt.items():
+            px = float(prices.loc[day, t])
+            if px > 0:
+                new_positions[t] = (val / old_total) * new_total / px
+
+        new_cash = (cash / old_total) * new_total
+        return new_positions, new_cash
+
     def simulate(
         self,
         prices: pd.DataFrame,
@@ -117,6 +145,11 @@ class FrecAccount:
     ) -> pd.DataFrame:
         """
         Day-by-day simulation starting from initial_cash + initial_positions.
+
+        On each activity date the portfolio is fully rebalanced so that weights
+        stay proportional to pre-activity weights and the new total NAV equals:
+          cash/stock inflow  → old_NAV + activity_value
+          cash/stock outflow → old_NAV − activity_value
 
         Returns a DataFrame (index = trading dates) with columns:
           cash, equity, total, net_flow, fee_accrued, <ticker...>
@@ -151,24 +184,32 @@ class FrecAccount:
 
         for day in dates:
             for act in act_by_date.get(day, []):
+                # Mark-to-market before activity to get current total NAV
+                mkt_pre   = {t: float(prices.loc[day, t]) * s
+                             for t, s in positions.items() if t in prices.columns}
+                old_total = sum(mkt_pre.values()) + cash
 
                 if act.atype == ActivityType.CASH_INFLOW:
-                    cash     += act.amount
+                    new_total = old_total + act.amount
                     net_flow += act.amount
+                    positions, cash = self._rebalance(positions, cash, prices, day, new_total)
 
                 elif act.atype == ActivityType.CASH_OUTFLOW:
-                    if act.amount > cash + 1e-6:
+                    if act.amount > old_total + 1e-6:
                         raise ValueError(
-                            "cash_outflow {:.2f} on {} exceeds available cash {:.2f}".format(
-                                act.amount, day.date(), cash))
-                    cash     -= act.amount
+                            "cash_outflow {:.2f} on {} exceeds portfolio NAV {:.2f}".format(
+                                act.amount, day.date(), old_total))
+                    new_total = old_total - act.amount
                     net_flow -= act.amount
+                    positions, cash = self._rebalance(positions, cash, prices, day, new_total)
 
                 elif act.atype == ActivityType.STOCK_INFLOW:
                     px = float(prices.loc[day, act.ticker]) \
                          if act.ticker in prices.columns else 0.0
-                    positions[act.ticker] = positions.get(act.ticker, 0.0) + act.shares
-                    net_flow += act.shares * px
+                    inflow_val = act.shares * px
+                    new_total  = old_total + inflow_val
+                    net_flow  += inflow_val
+                    positions, cash = self._rebalance(positions, cash, prices, day, new_total)
 
                 elif act.atype == ActivityType.STOCK_OUTFLOW:
                     held = positions.get(act.ticker, 0.0)
@@ -179,14 +220,12 @@ class FrecAccount:
                                 act.shares, act.ticker, day.date(), held))
                     px = float(prices.loc[day, act.ticker]) \
                          if act.ticker in prices.columns else 0.0
-                    new_held = held - act.shares
-                    if new_held < 1e-9:
-                        positions.pop(act.ticker, None)
-                    else:
-                        positions[act.ticker] = new_held
-                    net_flow -= act.shares * px
+                    outflow_val = act.shares * px
+                    new_total   = old_total - outflow_val
+                    net_flow   -= outflow_val
+                    positions, cash = self._rebalance(positions, cash, prices, day, new_total)
 
-            # Mark to market
+            # Mark to market (after any rebalance)
             mkt = {t: float(prices.loc[day, t]) * s
                    for t, s in positions.items() if t in prices.columns}
             equity = sum(mkt.values())

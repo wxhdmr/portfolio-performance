@@ -4,12 +4,20 @@ Test Scenarios — One per Account Activity Type
 Each scenario starts from the same $100 k Frec-weighted portfolio
 (top-10 holdings) and exercises exactly one activity.
 
-Scenario 1  cash_inflow   -- deposit $50 k cash on 2024-10-15
-Scenario 2  cash_outflow  -- withdraw $20 k cash on 2025-01-15
-             (starts with $50 k cash + $50 k equity so there is enough cash)
-Scenario 3  stock_inflow  -- transfer in 30 AAPL shares on 2024-11-01
-Scenario 4  stock_outflow -- transfer out half of initial NVDA shares on 2025-04-01
-             (also demonstrates the negative-shares guard)
+On every activity the portfolio is immediately rebalanced so that
+all holdings (including cash) maintain their pre-activity weights,
+and the total NAV shifts by the cash value of the activity:
+
+  Scenario 1  cash_inflow   -- deposit $50 k cash on 2024-10-15
+                               new NAV = old NAV + $50 k; rebalance
+  Scenario 2  cash_outflow  -- withdraw $20 k cash on 2025-01-15
+                               new NAV = old NAV - $20 k; rebalance
+                               (guard: amount must not exceed portfolio NAV)
+  Scenario 3  stock_inflow  -- transfer in 30 AAPL shares on 2024-11-01
+                               new NAV = old NAV + 30 × AAPL price; rebalance
+  Scenario 4  stock_outflow -- transfer out half of initial NVDA shares 2025-04-01
+                               new NAV = old NAV - shares × NVDA price; rebalance
+                               (guard: shares must not exceed current holding)
 
 Outputs saved to data/:
   test_scenario_1_cash_inflow.csv
@@ -110,7 +118,7 @@ def save_and_summarise(sim: pd.DataFrame, fname: str, prices: pd.DataFrame,
 def scenario_1(prices: pd.DataFrame, weights: pd.DataFrame) -> None:
     print_scenario_header(
         1, "Cash Inflow",
-        "Deposit $50,000 cash on 2024-10-15")
+        "Deposit $50,000 cash on 2024-10-15 → rebalance to pre-activity weights")
 
     positions, residual = build_positions(prices, weights, BUDGET, TOP_N)
 
@@ -128,10 +136,10 @@ def scenario_1(prices: pd.DataFrame, weights: pd.DataFrame) -> None:
     snapshot(sim, "Day of  cash inflow",     ACTIVITY_DATE)
     snapshot(sim, "End of period",           str(prices.index[-1].date()))
 
-    cash_before = float(sim.loc[prev_date[-1], "cash"]) if len(prev_date) else 0
-    cash_after  = float(sim.loc[ts[0], "cash"])
-    print("\n  Cash jump on activity date: ${:,.2f} -> ${:,.2f}  (delta ${:,.2f})".format(
-          cash_before, cash_after, cash_after - cash_before))
+    nav_before = float(sim.loc[prev_date[-1], "total"]) if len(prev_date) else BUDGET
+    nav_after  = float(sim.loc[ts[0], "total"])
+    print("\n  NAV jump on activity date : ${:,.2f} -> ${:,.2f}  (delta ${:,.2f}, expected ~$50,000)".format(
+          nav_before, nav_after, nav_after - nav_before))
 
     save_and_summarise(sim, "test_scenario_1_cash_inflow.csv", prices, acc, 1)
 
@@ -141,17 +149,14 @@ def scenario_1(prices: pd.DataFrame, weights: pd.DataFrame) -> None:
 def scenario_2(prices: pd.DataFrame, weights: pd.DataFrame) -> None:
     print_scenario_header(
         2, "Cash Outflow",
-        "Withdraw $20,000 cash on 2025-01-15  "
-        "(starts with $50 k cash + $50 k equity)")
+        "Withdraw $20,000 on 2025-01-15 → rebalance to pre-activity weights")
 
-    # Half equity, half cash so there is clearly enough cash to withdraw
-    positions, _ = build_positions(prices, weights, BUDGET // 2, TOP_N)
-    initial_cash = 50_000.0
+    positions, residual = build_positions(prices, weights, BUDGET, TOP_N)
 
     acc = FrecAccount(name="S2 cash_outflow", annual_fee=ANNUAL_FEE)
     acc.cash_outflow("2025-01-15", 20_000)
 
-    sim = acc.simulate(prices, initial_cash=initial_cash, initial_positions=positions)
+    sim = acc.simulate(prices, initial_cash=residual, initial_positions=positions)
 
     ACTIVITY_DATE = "2025-01-15"
     ts = sim.index[sim.index >= pd.Timestamp(ACTIVITY_DATE)]
@@ -162,13 +167,13 @@ def scenario_2(prices: pd.DataFrame, weights: pd.DataFrame) -> None:
     snapshot(sim, "Day of  cash outflow",    ACTIVITY_DATE)
     snapshot(sim, "End of period",           str(prices.index[-1].date()))
 
-    cash_before = float(sim.loc[prev_date[-1], "cash"]) if len(prev_date) else initial_cash
-    cash_after  = float(sim.loc[ts[0], "cash"])
-    print("\n  Cash drop on activity date: ${:,.2f} -> ${:,.2f}  (delta ${:,.2f})".format(
-          cash_before, cash_after, cash_after - cash_before))
+    nav_before = float(sim.loc[prev_date[-1], "total"]) if len(prev_date) else BUDGET
+    nav_after  = float(sim.loc[ts[0], "total"])
+    print("\n  NAV drop on activity date : ${:,.2f} -> ${:,.2f}  (delta ${:,.2f}, expected ~-$20,000)".format(
+          nav_before, nav_after, nav_after - nav_before))
 
-    # Demonstrate the guard: try to withdraw more than available
-    print("\n  Validation check -- attempt to withdraw more than available cash:")
+    # Demonstrate the guard: try to withdraw more than portfolio NAV
+    print("\n  Validation check -- attempt to withdraw more than portfolio NAV:")
     acc_bad = FrecAccount(name="guard-test", annual_fee=0)
     acc_bad.cash_outflow("2024-05-01", 999_999)
     try:
@@ -185,7 +190,7 @@ def scenario_2(prices: pd.DataFrame, weights: pd.DataFrame) -> None:
 def scenario_3(prices: pd.DataFrame, weights: pd.DataFrame) -> None:
     print_scenario_header(
         3, "Stock Inflow",
-        "Transfer in 30 AAPL shares on 2024-11-01 (in-kind, no cash)")
+        "Transfer in 30 AAPL shares on 2024-11-01 → rebalance to pre-activity weights")
 
     positions, residual = build_positions(prices, weights, BUDGET, TOP_N)
 
@@ -203,16 +208,14 @@ def scenario_3(prices: pd.DataFrame, weights: pd.DataFrame) -> None:
     snapshot(sim, "Day of  stock inflow",    ACTIVITY_DATE)
     snapshot(sim, "End of period",           str(prices.index[-1].date()))
 
-    aapl_px = float(prices.loc[ts[0], "AAPL"])
-    aapl_before = float(sim.loc[prev_date[-1]].get("AAPL", 0)) if len(prev_date) else 0
-    aapl_after  = float(sim.loc[ts[0]].get("AAPL", 0))
-    print("\n  AAPL value on activity date  : ${:,.2f} -> ${:,.2f}".format(
-          aapl_before, aapl_after))
-    print("  AAPL price on settle date    : ${:,.2f}".format(aapl_px))
-    print("  In-kind value added          : ${:,.2f}  (30 x ${:,.2f})".format(
-          30 * aapl_px, aapl_px))
-    print("  Cash unchanged               : ${:,.2f}".format(
-          float(sim.loc[ts[0], "cash"])))
+    aapl_px    = float(prices.loc[ts[0], "AAPL"])
+    inflow_val = 30 * aapl_px
+    nav_before = float(sim.loc[prev_date[-1], "total"]) if len(prev_date) else BUDGET
+    nav_after  = float(sim.loc[ts[0], "total"])
+    print("\n  AAPL price on settle date    : ${:,.2f}".format(aapl_px))
+    print("  In-kind value added          : ${:,.2f}  (30 × ${:,.2f})".format(inflow_val, aapl_px))
+    print("  NAV jump on activity date    : ${:,.2f} -> ${:,.2f}  (delta ${:,.2f}, expected ~${:,.2f})".format(
+          nav_before, nav_after, nav_after - nav_before, inflow_val))
 
     save_and_summarise(sim, "test_scenario_3_stock_inflow.csv", prices, acc, 3)
 
@@ -222,7 +225,7 @@ def scenario_3(prices: pd.DataFrame, weights: pd.DataFrame) -> None:
 def scenario_4(prices: pd.DataFrame, weights: pd.DataFrame) -> None:
     print_scenario_header(
         4, "Stock Outflow",
-        "Transfer out half of initial NVDA shares on 2025-04-01 (in-kind)")
+        "Transfer out half of initial NVDA shares on 2025-04-01 → rebalance")
 
     positions, residual = build_positions(prices, weights, BUDGET, TOP_N)
 
@@ -248,15 +251,14 @@ def scenario_4(prices: pd.DataFrame, weights: pd.DataFrame) -> None:
     snapshot(sim, "End of period",            str(prices.index[-1].date()))
 
     nvda_px     = float(prices.loc[ts[0], "NVDA"])
-    nvda_before = float(sim.loc[prev_date[-1]].get("NVDA", 0)) if len(prev_date) else 0
-    nvda_after  = float(sim.loc[ts[0]].get("NVDA", 0))
-    print("\n  NVDA value on activity date  : ${:,.2f} -> ${:,.2f}".format(
-          nvda_before, nvda_after))
-    print("  NVDA price on settle date    : ${:,.2f}".format(nvda_px))
-    print("  In-kind value removed        : ${:,.2f}  ({:.4f} x ${:,.2f})".format(
-          nvda_half * nvda_px, nvda_half, nvda_px))
-    print("  Cash unchanged               : ${:,.2f}".format(
-          float(sim.loc[ts[0], "cash"])))
+    outflow_val = nvda_half * nvda_px
+    nav_before  = float(sim.loc[prev_date[-1], "total"]) if len(prev_date) else BUDGET
+    nav_after   = float(sim.loc[ts[0], "total"])
+    print("\n  NVDA price on settle date    : ${:,.2f}".format(nvda_px))
+    print("  In-kind value removed        : ${:,.2f}  ({:.4f} × ${:,.2f})".format(
+          outflow_val, nvda_half, nvda_px))
+    print("  NAV drop on activity date    : ${:,.2f} -> ${:,.2f}  (delta ${:,.2f}, expected ~-${:,.2f})".format(
+          nav_before, nav_after, nav_after - nav_before, outflow_val))
 
     # Demonstrate the negative-shares guard
     print("\n  Validation check -- attempt to transfer out more shares than held:")
