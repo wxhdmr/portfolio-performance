@@ -43,8 +43,9 @@ from matplotlib.lines import Line2D
 sys.path.insert(0, str(Path(__file__).parent))
 from frec_account_activities import FrecAccount
 
-sys.stdout.reconfigure(encoding="utf-8")
 warnings.filterwarnings("ignore")
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
 
 DATA_DIR  = Path(__file__).parent.parent / "data"
 RISK_FREE = 0.045

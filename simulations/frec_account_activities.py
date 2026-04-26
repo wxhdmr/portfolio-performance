@@ -31,8 +31,9 @@ import matplotlib.dates as mdates
 import matplotlib.ticker as mticker
 from matplotlib.gridspec import GridSpec
 
-sys.stdout.reconfigure(encoding="utf-8")
 warnings.filterwarnings("ignore")
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
 
 DATA_DIR = Path(__file__).parent.parent / "data"
 

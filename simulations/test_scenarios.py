@@ -38,7 +38,8 @@ from pathlib import Path
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
-sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
 warnings.filterwarnings("ignore")
 
 # Import the account class from the same simulations folder
