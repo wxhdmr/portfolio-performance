@@ -254,37 +254,47 @@ class FrecAccount:
         benchmark: Optional[pd.Series] = None,
         risk_free: float = 0.045,
     ) -> dict:
-        """Time-Weighted Return and risk metrics from a simulate() result."""
-        nav        = sim["total"]
-        flow_delta = sim["net_flow"].diff().fillna(0.0)
+        """
+        Performance metrics with activity dates excluded.
 
-        # Flow-adjusted daily returns (TWR method)
-        prev_nav  = nav.shift(1).fillna(nav.iloc[0])
-        denom     = prev_nav + flow_delta.clip(lower=0)
-        daily_ret = pd.Series(0.0, index=nav.index)
-        mask      = denom > 1e-6
-        daily_ret[mask] = (nav - prev_nav - flow_delta)[mask] / denom[mask]
-        daily_ret = daily_ret.iloc[1:]   # drop day-0 (no return to compute)
+        On activity dates the NAV jumps/drops due to cash or stock flows, not
+        market performance.  Those days are identified by a non-zero change in
+        net_flow and dropped from return accumulation, drawdown, and TE so that
+        the metrics reflect pure investment performance only.
+        """
+        nav = sim["total"]
 
-        n       = max(len(daily_ret), 1)
-        twr     = float((1 + daily_ret).prod()) - 1
+        # Activity dates: net_flow changed (inflow or outflow event)
+        is_activity = sim["net_flow"].diff().abs() > 1e-3
+
+        # Simple daily returns; drop day-0 (no prior day) and activity dates
+        all_ret    = nav.pct_change().iloc[1:]
+        is_act_ret = is_activity.iloc[1:]
+        clean_ret  = all_ret[~is_act_ret]
+
+        n       = max(len(clean_ret), 1)
+        twr     = float((1 + clean_ret).prod()) - 1
         ann_ret = (1 + twr) ** (252 / n) - 1
-        ann_vol = float(daily_ret.std() * np.sqrt(252))
+        ann_vol = float(clean_ret.std() * np.sqrt(252))
         sharpe  = (ann_ret - risk_free) / ann_vol if ann_vol > 0 else 0.0
-        peak    = np.maximum.accumulate(nav.values)
-        max_dd  = float(np.min((nav.values - peak) / np.where(peak > 0, peak, 1)))
+
+        # Drawdown from cumulative clean returns (activity jumps not included)
+        cum    = (1 + clean_ret).cumprod()
+        peak   = cum.cummax()
+        max_dd = float(((cum - peak) / peak).min())
 
         out = dict(twr=twr, ann_return=ann_ret, ann_vol=ann_vol,
                    sharpe=sharpe, max_drawdown=max_dd,
                    total_fees=float(sim["fee_accrued"].iloc[-1]))
 
         if benchmark is not None:
-            bench_ret  = benchmark.reindex(nav.index).ffill().pct_change().iloc[1:]
-            active_ret = daily_ret - bench_ret
-            te         = float(active_ret.std() * np.sqrt(252))
-            bench_ann  = float((1 + bench_ret).prod() ** (252 / n) - 1)
-            ann_act    = ann_ret - bench_ann
-            ir         = ann_act / te if te > 0 else 0.0
+            bench_ret   = benchmark.reindex(nav.index).ffill().pct_change().iloc[1:]
+            clean_bench = bench_ret[~is_act_ret].reindex(clean_ret.index)
+            active_ret  = clean_ret - clean_bench
+            te          = float(active_ret.std() * np.sqrt(252))
+            bench_ann   = float((1 + clean_bench).prod() ** (252 / n) - 1)
+            ann_act     = ann_ret - bench_ann
+            ir          = ann_act / te if te > 0 else 0.0
             out.update(tracking_error=te, active_return=ann_act,
                        benchmark_ann=bench_ann, ir=ir)
 

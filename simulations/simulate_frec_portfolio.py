@@ -151,26 +151,31 @@ def simulate_frec_portfolio(
     spy_nav     = spy_aligned / float(spy_aligned.iloc[0]) * float(port_nav.iloc[0])
     outperf_usd = port_nav - spy_nav
 
-    # ── Performance stats (TWR flow-adjusted) ──────────────────────────────────
-    flow_delta = sim["net_flow"].diff().fillna(0.0)
-    prev_nav   = port_nav.shift(1).fillna(port_nav.iloc[0])
-    denom      = prev_nav + flow_delta.clip(lower=0)
-    daily_ret  = pd.Series(0.0, index=dates)
-    mask       = denom > 1e-6
-    daily_ret[mask] = (port_nav - prev_nav - flow_delta)[mask] / denom[mask]
-    daily_ret  = daily_ret.iloc[1:]
+    # ── Performance stats (activity dates excluded) ────────────────────────────
+    # Activity dates: net_flow changed — NAV shift is from the flow, not market.
+    # Drop those days from return accumulation, drawdown, and TE.
+    is_activity = sim["net_flow"].diff().abs() > 1e-3
 
-    spy_ret    = spy_nav.pct_change().dropna()
-    active_ret = daily_ret.reindex(spy_ret.index) - spy_ret
-    n          = max(len(daily_ret), 1)
-    ann_port   = float((1 + daily_ret).prod() ** (252 / n) - 1)
-    ann_spy    = float((1 + spy_ret).prod()   ** (252 / n) - 1)
-    te         = float(active_ret.std() * np.sqrt(252))
-    ir         = (ann_port - ann_spy) / te if te > 0 else 0.0
-    vol        = float(daily_ret.std() * np.sqrt(252))
-    sharpe     = (ann_port - RISK_FREE) / vol if vol > 0 else 0.0
-    peak       = np.maximum.accumulate(port_nav.values)
-    max_dd     = float(np.min((port_nav.values - peak) / np.where(peak > 0, peak, 1)))
+    all_ret    = port_nav.pct_change().iloc[1:]
+    is_act_ret = is_activity.iloc[1:]
+    clean_ret  = all_ret[~is_act_ret]
+
+    spy_ret_all  = spy_nav.pct_change().iloc[1:]
+    clean_spy    = spy_ret_all[~is_act_ret].reindex(clean_ret.index)
+    active_ret   = clean_ret - clean_spy
+
+    n        = max(len(clean_ret), 1)
+    ann_port = float((1 + clean_ret).prod() ** (252 / n) - 1)
+    ann_spy  = float((1 + clean_spy).prod()  ** (252 / n) - 1)
+    te       = float(active_ret.std() * np.sqrt(252))
+    ir       = (ann_port - ann_spy) / te if te > 0 else 0.0
+    vol      = float(clean_ret.std() * np.sqrt(252))
+    sharpe   = (ann_port - RISK_FREE) / vol if vol > 0 else 0.0
+
+    # Drawdown from cumulative clean returns (activity jumps excluded)
+    cum_clean  = (1 + clean_ret).cumprod()
+    peak_clean = cum_clean.cummax()
+    max_dd     = float(((cum_clean - peak_clean) / peak_clean).min())
 
     final_port = float(port_nav.iloc[-1])
     final_spy  = float(spy_nav.iloc[-1])
