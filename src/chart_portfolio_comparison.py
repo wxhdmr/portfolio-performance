@@ -231,8 +231,7 @@ fig.text(0.07, 0.94,
          "Frec Direct Index vs S&P 500 ETF (SPY)",
          fontsize=16, fontweight="bold", color=ACCENT, va="bottom")
 fig.text(0.07, 0.91,
-         "NVDA / GOOG / GOOGL / AVGO  +1.5pp overweight  |  "
-         "0.09% annual fee  |  {s} - {e}  |  Starting value $100,000".format(
+         "{s} - {e}  |  Starting value $100,000".format(
              s=start_str, e=end_str),
          fontsize=9.5, color=MUTED, va="bottom")
 
