@@ -57,10 +57,13 @@ py src/fetch_sp500_weights.py
 # 3. Build Frec-tilted weights and compute daily returns
 py src/build_frec_weights.py
 
-# 4. Compute portfolio statistics (TE, IR, Sharpe, drawdown)
+# 4. Build S&P 500 daily weights
+py src/reconcile_weights.py
+
+# 5. Compute portfolio statistics (TE, IR, Sharpe, drawdown)
 py src/portfolio_stats.py
 
-# 5. Generate Frec vs SPY comparison chart
+# 6. Generate Frec vs SPY comparison chart
 py src/chart_portfolio_comparison.py
 ```
 
@@ -73,6 +76,30 @@ Key outputs in `data/`:
 | `portfolio_comparison_chart.png` | NAV chart: Frec net vs SPY |
 
 ## Simulations
+
+### Synthetic portfolio simulation
+
+Generate a portfolio that exactly matches a target tracking error and net
+excess return vs SPY, then validate and chart it in one call:
+
+```python
+import pandas as pd
+from simulations.simple_simulation import run_simulation
+
+prices = pd.read_csv("data/sp500_closing_prices.csv", index_col=0, parse_dates=True)
+
+stats = run_simulation(
+    spy_closing_prices = prices,
+    target_annual_te   = 0.02,    # 2.0% tracking error
+    target_annual_er   = 0.01,    # +1.0% net excess return
+    annual_fee         = 0.0009,
+    initial_value      = 100_000,
+    tolerance          = 1e-4,    # raises ValueError if targets not met
+)
+```
+
+Individual functions are also importable: `simulate_return_with_TE_ER`,
+`validate`, `plot_simulation`.
 
 ### Frec portfolio with account activities
 
@@ -107,12 +134,14 @@ Or use the higher-level wrapper that generates a holdings CSV and chart:
 from simulations.simulate_frec_portfolio import simulate_frec_portfolio
 
 simulate_frec_portfolio(
-    initial_value = 100_000,
-    activities    = {
-        "2024-10-15": {"activitytype": "cash", "value":  50_000},
-        "2025-01-15": {"activitytype": "cash", "value": -20_000},
-        "2024-11-01": {"activitytype": "AAPL", "value":     30},   # shares
+    initial_value=200000,
+    activities={
+        "2024-10-15": {"activitytype": "cash",  "value":  50000},   # deposit
+        "2025-01-15": {"activitytype": "cash",  "value": -20000},   # withdrawal
+        "2024-11-01": {"activitytype": "AAPL",  "value":  300},     # +300 shares in
+        "2025-04-01": {"activitytype": "NVDA",  "value": -200},     # -200 shares out
     },
+    output_prefix="frec_simulation",   # → data/frec_simulation.csv + _chart.png
 )
 ```
 
@@ -121,30 +150,6 @@ Run the four built-in test scenarios:
 ```bash
 py simulations/test_scenarios.py
 ```
-
-### Synthetic portfolio simulation
-
-Generate a portfolio that exactly matches a target tracking error and net
-excess return vs SPY, then validate and chart it in one call:
-
-```python
-import pandas as pd
-from simulations.simple_simulation import run_simulation
-
-prices = pd.read_csv("data/sp500_closing_prices.csv", index_col=0, parse_dates=True)
-
-stats = run_simulation(
-    spy_closing_prices = prices,
-    target_annual_te   = 0.02,    # 2.0% tracking error
-    target_annual_er   = 0.01,    # +1.0% net excess return
-    annual_fee         = 0.0009,
-    initial_value      = 100_000,
-    tolerance          = 1e-4,    # raises ValueError if targets not met
-)
-```
-
-Individual functions are also importable: `simulate_return_with_TE_ER`,
-`validate`, `plot_simulation`.
 
 ## Data source
 
