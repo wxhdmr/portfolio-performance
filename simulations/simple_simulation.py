@@ -439,6 +439,56 @@ def plot_simulation(
     plt.close()
 
 
+# ── run_simulation ────────────────────────────────────────────────────────────
+
+def run_simulation(
+    spy_closing_prices: pd.DataFrame | pd.Series,
+    target_annual_te: float,
+    target_annual_er: float,
+    annual_fee: float = 0.0009,
+    initial_value: float | None = None,
+    tolerance: float = 1e-4,
+    output_path: str | Path | None = None,
+    chart_path: str | Path | None = None,
+    random_seed: int = 42,
+) -> dict:
+    """
+    Simulate, validate, and plot in one call.
+
+    Returns the stats dict from validate().
+    All parameters are forwarded to the underlying functions;
+    see simulate_return_with_TE_ER for full parameter docs.
+    """
+    if isinstance(spy_closing_prices, pd.DataFrame):
+        spy_raw = spy_closing_prices["SPY"]
+    else:
+        spy_raw = spy_closing_prices
+
+    start_val = float(initial_value) if initial_value is not None \
+                else float(spy_raw.dropna().iloc[0])
+
+    port = simulate_return_with_TE_ER(
+        spy_closing_prices = spy_closing_prices,
+        target_annual_te   = target_annual_te,
+        target_annual_er   = target_annual_er,
+        annual_fee         = annual_fee,
+        initial_value      = initial_value,
+        tolerance          = tolerance,
+        output_path        = output_path,
+        random_seed        = random_seed,
+    )
+
+    spy_scaled = spy_raw.dropna() / float(spy_raw.dropna().iloc[0]) * start_val
+
+    print()
+    stats = validate(port, spy_scaled, annual_fee=annual_fee)
+
+    print()
+    plot_simulation(port, spy_scaled, annual_fee=annual_fee, chart_path=chart_path)
+
+    return stats
+
+
 # ── Demo ──────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
@@ -446,22 +496,11 @@ if __name__ == "__main__":
         DATA_DIR / "sp500_closing_prices.csv",
         index_col=0, parse_dates=True)
 
-    ANNUAL_FEE = 0.0009
-
-    # Pass the full DataFrame — SPY column is extracted automatically
-    port = simulate_return_with_TE_ER(
+    run_simulation(
         spy_closing_prices = prices,
-        target_annual_te   = 0.02,    # 2.0% tracking error
-        target_annual_er   = 0.01,    # +1.0% net excess return
-        annual_fee         = ANNUAL_FEE,
-        initial_value      = 100_000,  # both SPY and portfolio start at $100k
+        target_annual_te   = 0.02,
+        target_annual_er   = 0.01,
+        annual_fee         = 0.0009,
+        initial_value      = 100_000,
         tolerance          = 1e-4,
     )
-
-    spy = prices["SPY"]
-    spy = spy / float(spy.iloc[0]) * 100_000   # scale SPY to match initial_value
-    print()
-    stats = validate(port, spy, annual_fee=ANNUAL_FEE)
-
-    print()
-    plot_simulation(port, spy, annual_fee=ANNUAL_FEE)
