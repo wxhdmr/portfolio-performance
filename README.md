@@ -159,3 +159,39 @@ py simulations/test_scenarios.py
 | Weight data | SEC EDGAR NPORT-P filings (SPY) |
 | Frequency | Daily closing prices |
 | Price field | Adjusted Close (`auto_adjust=True` — splits & dividends applied) |
+
+
+## Summary for the project
+# 1.a 
+    Download SPY price from yfinance and download components of SP500 weights and price, I met the following issues:
+        Issue: SP500 components and weights are not very easy to find, tried ask claude and see we can use quarterly State Street filing to SEC to simulate the components and weights
+        Issue: not all cusip from State Street filing has corresponding ticker, could be multiple reasons as 1. company been acquired 2. foreign company that does not have mapping from cusip to ticker. Build the mapping by company name, and calculate the tracking error for this portfolio with SPY and see TE is about 1% so would be okay to use this to simulate SPY
+
+# 1.b 
+    See ### Synthetic portfolio simulation above
+    Assume required true excess return equals excess return plus fee. Assume the noise are normal distributed with same vol on each date. Assume alpha is equally distributed to all dates.
+
+    Validation: compare realized return and TE with target return and target TE, with given tolerance
+
+    See ### Frec portfolio with account activities above
+    Apart from simple simulate SP500 index, I also tried to contruct a portfolio that has low tracking error and some excess return based on S&P500 components. Since our initial portfolio has 1% TE already, start from the initial portfolio, pick a few stocks by looking at return, volatility, weight in the portfolio and manual pick NVDA/GOOG/AVGO, and add 1.5% weight to the 3 ticker, rescale the portfolio weight. This create a new portfolio with 1.75% TE and 2% annual excess return.
+	    Issue: no additional weight data for year 2026, will use 2025-12-31 data as weight for year 2026
+        Issue: no record of corporate action so use adjusted price from yfinance and assume no corporate action in portfolio construction
+
+# 2 
+    See ### Synthetic portfolio simulation above and ### Frec portfolio with account activities above above, both will generate chart needed
+
+# 3
+    See ### Frec portfolio with account activities above
+    Assumptions: no corporation action, all activities with stocks are using adjusted number of shares, no transaction cost, cash inflow/outflow, security inflow/outflow has no delay in rebalancing, no market impact from trading, all stocks traded at close price, fractional shares are allowed 
+    It directly affects portfolio value by the equivalent cash value of the inflow/outflow, and for comparison with SPY, adjust SPY portfolio with same equivalent cash value of the activities, and remove these dates from return/TE calculation
+
+# 4
+    Including account activities in the chart, include drawdown, Sharpe Ratio to the chart
+
+# Proposal if given another 8 hours:
+    1. Add risk model to the project, which can be used to calculate implied tracking error, adding transaction cost
+    2. Improve portfolio construction, including integer shares, better handle account activities with rebalancing, include market rebalance delays
+    3. Improve data quality, including improve data completeness of stock prices, corporate actions
+    4. Include intraday trading other than rely on close price
+
