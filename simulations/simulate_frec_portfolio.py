@@ -145,10 +145,19 @@ def simulate_frec_portfolio(
     print(f"  CSV  → {csv_path}  ({len(sim)} rows × {len(sim.columns)} cols)")
 
     # ── Derived series ─────────────────────────────────────────────────────────
-    port_nav    = sim["total"]
-    dates       = port_nav.index
-    spy_aligned = spy_px.reindex(dates).ffill()
-    spy_nav     = spy_aligned / float(spy_aligned.iloc[0]) * float(port_nav.iloc[0])
+    port_nav = sim["total"]
+    dates    = port_nav.index
+
+    # Build a flow-adjusted SPY NAV: same starting value, grows by SPY's daily
+    # return each day, and receives the same dollar flow on each activity date.
+    # This makes the Frec vs SPY comparison purely about stock selection.
+    spy_daily_ret = spy_px.reindex(dates).ffill().pct_change().fillna(0.0)
+    flow_changes  = sim["net_flow"].diff().fillna(0.0)
+    spy_vals      = [float(port_nav.iloc[0])]
+    for i in range(1, len(dates)):
+        grown = spy_vals[-1] * (1.0 + float(spy_daily_ret.iloc[i]))
+        spy_vals.append(grown + float(flow_changes.iloc[i]))
+    spy_nav     = pd.Series(spy_vals, index=dates)
     outperf_usd = port_nav - spy_nav
 
     # ── Performance stats (activity dates excluded) ────────────────────────────
@@ -188,7 +197,7 @@ def simulate_frec_portfolio(
     print("  Frec Portfolio vs SPY")
     print("{:=<58}".format(""))
     print("  Final NAV        : ${:>12,.2f}".format(final_port))
-    print("  SPY (no flows)   : ${:>12,.2f}".format(final_spy))
+    print("  SPY (flow-adj.)  : ${:>12,.2f}".format(final_spy))
     print("  Gain vs SPY      : ${:>+12,.2f}  ({:+.2f}%)".format(gain_usd, gain_pct))
     print("  Fees paid        : -${:>11,.2f}".format(total_fees))
     print("  Ann. Return(net) : {:>+9.4f}%  (SPY {:>+.4f}%)".format(
@@ -288,7 +297,7 @@ def simulate_frec_portfolio(
 
     legend_elements = [
         Line2D([0], [0], color=SPY_COL,  lw=1.8,
-               label="SPY  (buy & hold ETF)  ${:,.0f}".format(int(final_spy))),
+               label="SPY  (flow-adjusted)  ${:,.0f}".format(int(final_spy))),
         Line2D([0], [0], color=FREC_COL, lw=2.4,
                label="Frec  (net, {:.2f}% fee)  ${:,.0f}".format(
                    annual_fee * 100, int(final_port))),
