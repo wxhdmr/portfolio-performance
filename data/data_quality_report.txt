@@ -1,12 +1,12 @@
-Report generated    : 2026-04-22
+Report generated    : 2026-04-25
 Ticker              : SPY
-Requested window    : 2024-04-22 → 2026-04-22
+Requested window    : 2024-04-25 → 2026-04-25
 
 ============================================================
 DATA QUALITY REPORT
 ============================================================
 Raw rows downloaded : 501
-Date range          : 2024-04-22 → 2026-04-21
+Date range          : 2024-04-25 → 2026-04-24
 Columns             : [('Close', 'SPY'), ('High', 'SPY'), ('Low', 'SPY'), ('Open', 'SPY'), ('Volume', 'SPY')]
 [fix] Flattened MultiIndex columns.
 
@@ -23,13 +23,13 @@ Columns             : [('Close', 'SPY'), ('High', 'SPY'), ('Low', 'SPY'), ('Open
 
 --- Summary statistics on clean Close ---
 count    501.000000
-mean     600.652603
-std       58.740663
-min      487.847260
-25%      552.062927
-50%      591.361572
-75%      658.929993
-max      710.140015
+mean     601.967404
+std       58.742891
+min      488.462341
+25%      552.564392
+50%      592.187561
+75%      659.455139
+max      713.940002
 
 [result] Clean rows: 501
 ============================================================

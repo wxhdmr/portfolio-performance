@@ -1,3 +1,0 @@
-strategy,te_%,factor_te_%,idio_te_%,active_alpha_%,info_ratio,n_stocks,max_weight_%
-Strategy 1: Max-Alpha (TE <= 2%),2.6401,1.0027,2.4423,17.8565,6.7636,159,2.8208
-Strategy 2: Min-TE (active alpha >= 1%),2.6401,1.0027,2.4423,17.8559,6.7634,159,2.8211

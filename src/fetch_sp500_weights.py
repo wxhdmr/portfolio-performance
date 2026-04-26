@@ -23,6 +23,7 @@ from pathlib import Path
 
 import pandas as pd
 import requests
+import yfinance as yf
 
 # ── Config ────────────────────────────────────────────────────────────────────
 CIK          = "0000884394"          # SPDR S&P 500 ETF Trust
@@ -32,9 +33,46 @@ FIGI_URL     = "https://api.openfigi.com/v3/mapping"
 HEADERS      = {"User-Agent": "portfolio-research zl524@nyu.edu"}
 FIGI_HEADERS = {"Content-Type": "application/json"}
 
-CUTOFF       = date.today() - timedelta(days=2 * 365)
-NS           = {"n": "http://www.sec.gov/edgar/nport"}
-OUTPUT_DIR   = Path(__file__).parent.parent / "data" / "sp500_weights"
+CUTOFF        = date.today() - timedelta(days=2 * 365)
+NS            = {"n": "http://www.sec.gov/edgar/nport"}
+OUTPUT_DIR    = Path(__file__).parent.parent / "data" / "sp500_weights"
+PRICE_OUTPUT  = Path(__file__).parent.parent / "data" / "sp500_closing_prices.csv"
+PRICE_BATCH   = 100   # tickers per yfinance call
+
+# ── Foreign PLC name → ticker map ─────────────────────────────────────────────
+# These companies are incorporated outside the US so their NPORT entries carry
+# CUSIP=000000000, which OpenFIGI cannot resolve.  We map them by company name.
+# "TE Connectivity Ltd" (pre-2024 name) and "TE Connectivity PLC" both → TEL.
+NAME_TO_TICKER: dict[str, str] = {
+    "Accenture PLC":                       "ACN",
+    "Allegion plc":                        "ALLE",
+    "Amcor PLC":                           "AMCR",
+    "Aon PLC":                             "AON",
+    "Aptiv PLC":                           "APTV",
+    "Arch Capital Group Ltd":              "ACGL",
+    "Bunge Global SA":                     "BG",
+    "CRH PLC":                             "CRH",
+    "Chubb Ltd":                           "CB",
+    "Eaton Corp PLC":                      "ETN",
+    "Everest Group Ltd":                   "EG",
+    "Garmin Ltd":                          "GRMN",
+    "Invesco Ltd":                         "IVZ",
+    "Johnson Controls International plc":  "JCI",
+    "Linde PLC":                           "LIN",
+    "LyondellBasell Industries NV":        "LYB",
+    "Medtronic PLC":                       "MDT",
+    "NXP Semiconductors NV":               "NXPI",
+    "Norwegian Cruise Line Holdings Ltd":  "NCLH",
+    "Pentair PLC":                         "PNR",
+    "Royal Caribbean Cruises Ltd":         "RCL",
+    "STERIS PLC":                          "STE",
+    "Seagate Technology Holdings PLC":     "STX",
+    "Smurfit WestRock PLC":               "SW",
+    "TE Connectivity Ltd":                 "TEL",   # pre-2024 name
+    "TE Connectivity PLC":                 "TEL",   # post-2024 name
+    "Trane Technologies PLC":              "TT",
+    "Willis Towers Watson PLC":            "WTW",
+}
 
 
 # ── Step 1: list NPORT-P filings ──────────────────────────────────────────────
@@ -150,18 +188,112 @@ def cusip_to_ticker(cusips: list[str]) -> dict[str, str]:
 
 def build_weights(holdings: list[dict], cusip_map: dict[str, str]) -> pd.Series:
     rows = []
+    name_hits = name_misses = 0
+
     for h in holdings:
-        ticker = cusip_map.get(h["cusip"])
+        cusip  = h["cusip"]
+        ticker = None
+
+        if cusip == "000000000":
+            # Foreign PLC: resolve via company name
+            ticker = NAME_TO_TICKER.get(h["name"])
+            if ticker:
+                name_hits += 1
+            else:
+                name_misses += 1
+        else:
+            ticker = cusip_map.get(cusip)
+
         if ticker and h["pct_val"] > 0:
             rows.append({"ticker": ticker, "weight_%": h["pct_val"]})
+
+    if name_hits or name_misses:
+        print(f"    name-map: {name_hits} resolved, {name_misses} still missing")
 
     df = pd.DataFrame(rows)
     if df.empty:
         return pd.Series(dtype=float)
 
+    # Normalise ticker format to match Yahoo Finance (e.g. BRK/B → BRK-B)
+    df["ticker"] = (df["ticker"]
+                    .str.replace("/", "-", regex=False)
+                    .str.replace(".", "-", regex=False))
+
     # If duplicate tickers (e.g. share classes), sum weights
     df = df.groupby("ticker")["weight_%"].sum()
     return df
+
+
+# ── Step 5: fetch 2-year closing prices ──────────────────────────────────────
+
+def fetch_prices(tickers: list[str]) -> pd.DataFrame:
+    """
+    Download 2-year daily adjusted closing prices for all S&P 500 tickers + SPY.
+    Downloads in batches of PRICE_BATCH to avoid yfinance timeouts.
+    Saves the result to data/sp500_closing_prices.csv.
+    Returns a Date × Ticker DataFrame of adjusted close prices.
+    """
+    all_tickers = sorted(set(tickers) | {"SPY"})
+    start = str(date.today() - timedelta(days=2 * 365))
+    end   = str(date.today())
+    n_batches = (len(all_tickers) + PRICE_BATCH - 1) // PRICE_BATCH
+
+    print(f"\nFetching 2-year closing prices for {len(all_tickers)} tickers …")
+    print(f"  Date range : {start} to {end}")
+    print(f"  Batches    : {n_batches}  ({PRICE_BATCH} tickers each)")
+
+    frames: list[pd.DataFrame] = []
+
+    for i in range(0, len(all_tickers), PRICE_BATCH):
+        batch   = all_tickers[i : i + PRICE_BATCH]
+        batch_n = i // PRICE_BATCH + 1
+        print(f"  [{batch_n}/{n_batches}]  {len(batch)} tickers … ", end="", flush=True)
+        try:
+            raw = yf.download(batch, start=start, end=end,
+                              auto_adjust=True, progress=False, threads=True)
+            if raw.empty:
+                print("empty, skipping")
+                continue
+
+            # yfinance returns MultiIndex (Price, Ticker) when len(batch) > 1
+            if isinstance(raw.columns, pd.MultiIndex):
+                close = raw["Close"].copy()
+            else:
+                close = raw[["Close"]].rename(columns={"Close": batch[0]})
+
+            close = close.dropna(axis=1, how="all")   # drop fully-missing tickers
+            frames.append(close)
+            print(f"{len(close.columns)} ok")
+        except Exception as e:
+            print(f"ERROR: {e}")
+        time.sleep(0.5)
+
+    if not frames:
+        raise RuntimeError("No price data was downloaded — check network / yfinance version.")
+
+    combined = pd.concat(frames, axis=1)
+    combined = combined.loc[:, ~combined.columns.duplicated()]   # deduplicate columns
+    combined.sort_index(inplace=True)
+    combined.ffill(inplace=True)                                 # fill holiday/delist gaps
+    combined.dropna(axis=1, how="all", inplace=True)
+
+    combined.index = pd.to_datetime(combined.index).date
+    combined.index.name = "Date"
+
+    PRICE_OUTPUT.parent.mkdir(parents=True, exist_ok=True)
+    combined.to_csv(PRICE_OUTPUT)
+
+    print(f"\n  Saved → {PRICE_OUTPUT}")
+    print(f"  Shape  : {combined.shape[0]} trading days × {combined.shape[1]} tickers")
+    print(f"  Range  : {combined.index[0]} to {combined.index[-1]}")
+
+    missing = sorted(set(all_tickers) - set(combined.columns))
+    if missing:
+        print(f"  No data: {len(missing)} tickers (delisted / not on Yahoo Finance)")
+        if len(missing) <= 20:
+            print(f"           {missing}")
+
+    return combined
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -224,6 +356,10 @@ def main():
     print(f"  Top 10   :")
     for tkr, w in latest.head(10).items():
         print(f"    {tkr:<8} {w:.3f}%")
+
+    # Step 5: fetch 2-year closing prices for all tickers in the weight data
+    all_tickers = sorted({t for s in all_weights.values() for t in s.index})
+    fetch_prices(all_tickers)
 
 
 if __name__ == "__main__":
