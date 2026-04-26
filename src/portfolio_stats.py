@@ -25,116 +25,12 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from portfolio_metrics import compute_returns, compute_stats, quarterly_breakdown
+
 sys.stdout.reconfigure(encoding="utf-8")
 
 DATA_DIR  = Path(__file__).parent.parent / "data"
 RISK_FREE = 0.045   # annual risk-free rate for Sharpe
-
-
-# ── Core helpers ──────────────────────────────────────────────────────────────
-
-def compute_returns(
-    weights: pd.DataFrame,
-    prices: pd.DataFrame,
-) -> pd.DataFrame:
-    """
-    Compute daily portfolio / SPY / active returns from a weight matrix.
-    Uses lagged weights so today's return uses yesterday's positions.
-    """
-    spy_ret   = prices["SPY"].pct_change()
-    price_ret = prices.pct_change()
-    tickers   = [c for c in weights.columns if c in price_ret.columns]
-    common    = weights.index.intersection(price_ret.index)
-
-    w_lag  = weights[tickers].shift(1).loc[common] / 100
-    r_day  = price_ret[tickers].loc[common]
-    spy_d  = spy_ret.reindex(common)
-
-    port_ret   = (w_lag * r_day).sum(axis=1)
-    active_ret = port_ret - spy_d
-
-    return pd.DataFrame({
-        "port_return":   port_ret,
-        "spy_return":    spy_d,
-        "active_return": active_ret,
-    }).dropna()
-
-
-def compute_stats(returns: pd.DataFrame, label: str) -> dict:
-    """
-    Compute all performance metrics from a returns DataFrame with columns
-    port_return, spy_return, active_return.
-    """
-    port = returns["port_return"]
-    spy  = returns["spy_return"]
-    act  = returns["active_return"]
-    n    = len(port)
-
-    ann_port  = (1 + port).prod() ** (252 / n) - 1
-    ann_spy   = (1 + spy).prod()  ** (252 / n) - 1
-    ann_act   = ann_port - ann_spy
-
-    te        = act.std() * np.sqrt(252)
-    ir        = ann_act / te if te > 0 else np.nan
-    vol       = port.std() * np.sqrt(252)
-    sharpe    = (ann_port - RISK_FREE) / vol if vol > 0 else np.nan
-    spy_sharpe = (ann_spy - RISK_FREE) / (spy.std() * np.sqrt(252))
-
-    full_port = (1 + port).prod() - 1
-    full_spy  = (1 + spy).prod()  - 1
-
-    cum       = (1 + port).cumprod()
-    peak      = cum.cummax()
-    max_dd    = float(((cum - peak) / peak).min())
-
-    cum_spy   = (1 + spy).cumprod()
-    peak_spy  = cum_spy.cummax()
-    max_dd_spy = float(((cum_spy - peak_spy) / peak_spy).min())
-
-    # Beta and correlation vs SPY
-    cov_mat = np.cov(port.values, spy.values)
-    beta    = cov_mat[0, 1] / cov_mat[1, 1] if cov_mat[1, 1] > 0 else np.nan
-    corr    = float(port.corr(spy))
-
-    return {
-        "label":       label,
-        "start":       str(returns.index[0].date()),
-        "end":         str(returns.index[-1].date()),
-        "n_days":      n,
-        "ann_return":  ann_port,
-        "ann_spy":     ann_spy,
-        "ann_active":  ann_act,
-        "te":          te,
-        "ir":          ir,
-        "vol":         vol,
-        "sharpe":      sharpe,
-        "spy_sharpe":  spy_sharpe,
-        "beta":        beta,
-        "corr_spy":    corr,
-        "full_period": full_port,
-        "full_spy":    full_spy,
-        "max_dd":      max_dd,
-        "max_dd_spy":  max_dd_spy,
-    }
-
-
-def quarterly_breakdown(returns: pd.DataFrame) -> pd.DataFrame:
-    rows = []
-    for qname, grp in returns.resample("Q"):
-        if len(grp) < 5:
-            continue
-        qp = (1 + grp["port_return"]).prod() - 1
-        qs = (1 + grp["spy_return"]).prod()  - 1
-        qa = qp - qs
-        te_q = grp["active_return"].std() * np.sqrt(252)
-        rows.append({
-            "quarter":         str(qname.date()),
-            "port_return":     qp,
-            "spy_return":      qs,
-            "active_return":   qa,
-            "tracking_error":  te_q,
-        })
-    return pd.DataFrame(rows).set_index("quarter")
 
 
 # ── Printing ──────────────────────────────────────────────────────────────────
@@ -269,8 +165,8 @@ def main() -> None:
     print(f"  Frec  : {len(frec_ret)}  return days")
 
     # ── Compute stats ─────────────────────────────────────────────────────────
-    nport_stats = compute_stats(nport_ret, "NPORT")
-    frec_stats  = compute_stats(frec_ret,  "Frec")
+    nport_stats = compute_stats(nport_ret, risk_free=RISK_FREE)
+    frec_stats  = compute_stats(frec_ret,  risk_free=RISK_FREE)
 
     # ── Print outputs ─────────────────────────────────────────────────────────
     print_header("Portfolio Performance Analysis  —  NPORT vs Frec vs SPY")

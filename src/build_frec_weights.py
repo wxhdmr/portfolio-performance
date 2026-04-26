@@ -23,6 +23,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from portfolio_metrics import compute_returns, compute_stats, quarterly_breakdown
+
 DATA_DIR = Path(__file__).parent.parent / "data"
 
 # ── Tilt configuration ────────────────────────────────────────────────────────
@@ -129,70 +131,29 @@ def build_daily_weights(
 
 # ── Performance ───────────────────────────────────────────────────────────────
 
-def compute_performance(
-    daily_weights: pd.DataFrame,
-    prices: pd.DataFrame,
-) -> pd.DataFrame:
-    """
-    Compute daily portfolio returns, SPY returns, and active returns.
-    Uses lagged weights so today's return reflects yesterday's positions.
-    """
-    spy_ret   = prices["SPY"].pct_change().dropna()
-    price_ret = prices.pct_change().dropna()
-    tickers   = [c for c in daily_weights.columns if c in price_ret.columns]
-
-    common    = daily_weights.index.intersection(price_ret.index)
-    w_lag     = daily_weights[tickers].shift(1).loc[common] / 100
-    r_day     = price_ret[tickers].loc[common]
-    spy_day   = spy_ret.reindex(common)
-
-    port_ret   = (w_lag * r_day).sum(axis=1)
-    active_ret = port_ret - spy_day
-
-    return pd.DataFrame({
-        "port_return":   port_ret,
-        "spy_return":    spy_day,
-        "active_return": active_ret,
-    })
-
-
 def print_metrics(returns: pd.DataFrame, label: str = "Frec Portfolio") -> None:
-    port = returns["port_return"]
-    spy  = returns["spy_return"]
-    act  = returns["active_return"]
-    n    = len(port)
-
-    ann_port   = (1 + port).prod() ** (252 / n) - 1
-    ann_spy    = (1 + spy).prod()  ** (252 / n) - 1
-    ann_active = (1 + act).prod()  ** (252 / n) - 1
-    te         = act.std() * np.sqrt(252)
-    ir         = ann_active / te
-    sharpe     = (ann_port - RISK_FREE) / (port.std() * np.sqrt(252))
-    full_port  = (1 + port).prod() - 1
-    full_spy   = (1 + spy).prod()  - 1
+    st = compute_stats(returns, risk_free=RISK_FREE)
 
     print(f"\n{'='*58}")
     print(f"  {label}")
     print(f"  Tilt: {', '.join(TILT_STOCKS)}  +{TILT_PP}pp each (before rescaling)")
     print(f"{'='*58}")
-    print(f"  Period          : {returns.index[0].date()} to {returns.index[-1].date()}")
-    print(f"  Trading days    : {n}")
-    print(f"  Ann. Return     : {ann_port*100:>+7.4f}%  (SPY: {ann_spy*100:>+7.4f}%)")
-    print(f"  Active Return   : {ann_active*100:>+7.4f}%/yr")
-    print(f"  Tracking Error  : {te*100:>7.4f}%  annualised")
-    print(f"  IR              : {ir:>7.3f}")
-    print(f"  Sharpe          : {sharpe:>7.3f}")
-    print(f"  Full-period     : {full_port*100:>+7.2f}%  (SPY: {full_spy*100:>+7.2f}%)")
-    print(f"  Full-period act : {(full_port-full_spy)*100:>+7.2f}%")
+    print(f"  Period          : {st['start']} to {st['end']}")
+    print(f"  Trading days    : {st['n_days']}")
+    print(f"  Ann. Return     : {st['ann_return']*100:>+7.4f}%  (SPY: {st['ann_spy']*100:>+7.4f}%)")
+    print(f"  Active Return   : {st['ann_active']*100:>+7.4f}%/yr")
+    print(f"  Tracking Error  : {st['te']*100:>7.4f}%  annualised")
+    print(f"  IR              : {st['ir']:>7.3f}")
+    print(f"  Sharpe          : {st['sharpe']:>7.3f}")
+    print(f"  Full-period     : {st['full_period']*100:>+7.2f}%  (SPY: {st['full_spy']*100:>+7.2f}%)")
+    print(f"  Full-period act : {(st['full_period']-st['full_spy'])*100:>+7.2f}%")
 
     print(f"\n  Quarterly breakdown:")
     print(f"  {'Quarter':<14} {'Portfolio':>10} {'SPY':>10} {'Active':>10}")
     print(f"  {'-'*14} {'-'*10} {'-'*10} {'-'*10}")
-    for qname, grp in returns.resample("Q"):
-        qp = (1 + grp["port_return"]).prod() - 1
-        qs = (1 + grp["spy_return"]).prod() - 1
-        qa = qp - qs
-        print(f"  {str(qname.date()):<14} {qp*100:>+9.2f}%  {qs*100:>+9.2f}%  {qa*100:>+9.3f}%")
+    for _, row in quarterly_breakdown(returns).iterrows():
+        print(f"  {row.name:<14} {row['port_return']*100:>+9.2f}%  "
+              f"{row['spy_return']*100:>+9.2f}%  {row['active_return']*100:>+9.3f}%")
 
     print(f"\n  Net delta after rescaling (avg across all quarters):")
     print(f"  {'Ticker':<8} {'Base avg':>10} {'Tilted avg':>12} {'Net delta':>10}")
@@ -254,7 +215,7 @@ def main() -> None:
 
     # 6. Compute and print performance
     print("\nComputing performance vs SPY ...")
-    returns = compute_performance(frec_daily, prices)
+    returns = compute_returns(frec_daily, prices)
     print_metrics(returns, label="Frec Portfolio vs SPY")
 
     # 7. Save returns

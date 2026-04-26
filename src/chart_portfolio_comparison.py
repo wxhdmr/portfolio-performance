@@ -17,13 +17,14 @@ import sys
 import warnings
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 import matplotlib.dates as mdates
 from matplotlib.gridspec import GridSpec
 from matplotlib.lines import Line2D
+
+from portfolio_metrics import compute_returns, compute_stats
 
 sys.stdout.reconfigure(encoding="utf-8")
 warnings.filterwarnings("ignore")
@@ -49,41 +50,11 @@ ACCENT   = "#f0f6fc"
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def compute_returns(weights: pd.DataFrame, prices: pd.DataFrame) -> pd.DataFrame:
-    spy_ret   = prices["SPY"].pct_change()
-    price_ret = prices.pct_change()
-    tickers   = [c for c in weights.columns if c in price_ret.columns]
-    common    = weights.index.intersection(price_ret.index)
-    w_lag     = weights[tickers].shift(1).loc[common] / 100
-    r_day     = price_ret[tickers].loc[common]
-    port_ret  = (w_lag * r_day).sum(axis=1)
-    return pd.DataFrame({
-        "port":   port_ret,
-        "spy":    spy_ret.reindex(common),
-        "active": port_ret - spy_ret.reindex(common),
-    }).dropna()
-
-
 def to_nav(ret: pd.Series) -> pd.Series:
     """Cumulative NAV prepended with day-0 value of INITIAL."""
     t0  = ret.index[0] - pd.tseries.offsets.BDay(1)
     nav = (1 + ret).cumprod() * INITIAL
     return pd.concat([pd.Series([INITIAL], index=[t0]), nav])
-
-
-def compute_stats(port: pd.Series, spy: pd.Series) -> dict:
-    act    = port - spy
-    n      = len(port)
-    ann_p  = (1 + port).prod() ** (252 / n) - 1
-    ann_s  = (1 + spy).prod()  ** (252 / n) - 1
-    te     = act.std() * np.sqrt(252)
-    ir     = (ann_p - ann_s) / te if te > 0 else np.nan
-    sharpe = (ann_p - RISK_FREE) / (port.std() * np.sqrt(252))
-    cum    = (1 + port).cumprod()
-    max_dd = float(((cum - cum.cummax()) / cum.cummax()).min())
-    return dict(ann_return=ann_p, ann_spy=ann_s, ann_active=ann_p - ann_s,
-                te=te, ir=ir, sharpe=sharpe, max_dd=max_dd,
-                full=(1 + port).prod() - 1, full_spy=(1 + spy).prod() - 1)
 
 
 # ── Load & compute ────────────────────────────────────────────────────────────
@@ -94,10 +65,11 @@ frec_w = pd.read_csv(DATA_DIR / "frec_weights_daily.csv",
                      index_col=0, parse_dates=True)
 
 frec_r   = compute_returns(frec_w, prices)
-spy_ret  = frec_r["spy"]
+spy_ret  = frec_r["spy_return"]
+net_ret  = frec_r["port_return"] - DAILY_FEE
 
-frec_gross = to_nav(frec_r["port"])
-frec_net   = to_nav(frec_r["port"] - DAILY_FEE)
+frec_gross = to_nav(frec_r["port_return"])
+frec_net   = to_nav(net_ret)
 spy_nav    = to_nav(spy_ret)
 
 dates     = frec_net.index
@@ -107,7 +79,10 @@ frec_gross= frec_gross.reindex(dates).ffill()
 outperf_usd = frec_net - spy_nav
 outperf_pct = (frec_net / spy_nav - 1) * 100
 
-st = compute_stats(frec_r["port"] - DAILY_FEE, spy_ret)
+net_returns = frec_r.copy()
+net_returns["port_return"]   = net_ret
+net_returns["active_return"] = net_ret - spy_ret
+st = compute_stats(net_returns, risk_free=RISK_FREE)
 
 final_net   = float(frec_net.iloc[-1])
 final_gross = float(frec_gross.iloc[-1])

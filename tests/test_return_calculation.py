@@ -2,16 +2,16 @@
 Unit tests for return calculation logic.
 
 Covers:
-  - apply_tilt()         in src/build_frec_weights.py
-  - compute_performance() in src/build_frec_weights.py
-  - compute_returns()    in src/portfolio_stats.py
+  - apply_tilt()      in src/build_frec_weights.py
+  - compute_returns() in src/portfolio_metrics.py  (used by all src files)
+  - compute_stats()   in src/portfolio_metrics.py
 """
 import numpy as np
 import pandas as pd
 import pytest
 
-from build_frec_weights import apply_tilt, compute_performance, TILT_STOCKS, TILT_PP
-from portfolio_stats import compute_returns
+from build_frec_weights import apply_tilt, TILT_STOCKS, TILT_PP
+from portfolio_metrics import compute_returns, compute_stats
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -78,97 +78,10 @@ class TestApplyTilt:
         assert abs(tilted["NVDA"].iloc[0] - expected_nvda) < 1e-9
 
 
-# ── compute_performance (build_frec_weights) ───────────────────────────────────
-
-class TestComputePerformance:
-    """Tests compute_performance() which uses lagged daily weights."""
-
-    def _inputs_100pct_aapl(self):
-        """4 trading days, 100% weight on AAPL throughout."""
-        dates = pd.date_range("2024-01-02", periods=4, freq="B")
-        prices = pd.DataFrame({
-            "AAPL": [100.0, 110.0, 121.0, 133.1],  # +10%/day
-            "MSFT": [200.0, 200.0, 200.0, 200.0],
-            "SPY":  [400.0, 420.0, 441.0, 463.05],  # +5%/day
-        }, index=dates)
-        weights = pd.DataFrame(
-            {"AAPL": [100.0] * 4, "MSFT": [0.0] * 4}, index=dates)
-        return weights, prices
-
-    def test_output_has_correct_columns(self):
-        w, p = self._inputs_100pct_aapl()
-        result = compute_performance(w, p)
-        assert set(result.columns) == {"port_return", "spy_return", "active_return"}
-
-    def test_active_return_equals_port_minus_spy(self):
-        """active_return must be exactly port_return − spy_return at every row."""
-        w, p = self._inputs_100pct_aapl()
-        result = compute_performance(w, p)
-        diff = (result["active_return"]
-                - (result["port_return"] - result["spy_return"])).abs()
-        assert diff.max() < 1e-12
-
-    def test_100pct_single_stock_port_return_matches_stock(self):
-        """With 100% weight on AAPL, port_return must equal AAPL's daily return."""
-        w, p = self._inputs_100pct_aapl()
-        result = compute_performance(w, p)
-        aapl_ret = p["AAPL"].pct_change().dropna()
-        common = result.index.intersection(aapl_ret.index)
-        np.testing.assert_allclose(
-            result.loc[common, "port_return"].values,
-            aapl_ret.loc[common].values,
-            rtol=1e-9,
-        )
-
-    def test_spy_return_column_matches_spy_pct_change(self):
-        w, p = self._inputs_100pct_aapl()
-        result = compute_performance(w, p)
-        spy_ret = p["SPY"].pct_change().dropna()
-        common = result.index.intersection(spy_ret.index)
-        np.testing.assert_allclose(
-            result.loc[common, "spy_return"].values,
-            spy_ret.loc[common].values,
-            rtol=1e-9,
-        )
-
-    def test_flat_prices_produce_zero_returns(self):
-        dates = pd.date_range("2024-01-02", periods=5, freq="B")
-        prices = pd.DataFrame({
-            "AAPL": [100.0] * 5,
-            "SPY":  [400.0] * 5,
-        }, index=dates)
-        weights = pd.DataFrame({"AAPL": [100.0] * 5}, index=dates)
-        result = compute_performance(weights, prices)
-        assert result["port_return"].abs().max() < 1e-12
-        assert result["spy_return"].abs().max() < 1e-12
-        assert result["active_return"].abs().max() < 1e-12
-
-    def test_uses_lagged_weights_not_current(self):
-        """
-        Weights switch from 100% AAPL (day 1) to 100% MSFT (day 2+).
-        Day-2 return must reflect day-1 weight (AAPL), not day-2 weight (MSFT).
-        """
-        dates = pd.date_range("2024-01-02", periods=3, freq="B")
-        prices = pd.DataFrame({
-            "AAPL": [100.0, 110.0, 115.0],  # +10% day-2, +4.55% day-3
-            "MSFT": [200.0, 200.0, 210.0],  # flat day-2, +5% day-3
-            "SPY":  [400.0, 402.0, 404.0],
-        }, index=dates)
-        weights = pd.DataFrame({
-            "AAPL": [100.0, 0.0, 0.0],
-            "MSFT": [  0.0, 100.0, 100.0],
-        }, index=dates)
-        result = compute_performance(weights, prices)
-        # Day 2: lagged = 100% AAPL → port_ret = +10%
-        assert abs(result.loc[dates[1], "port_return"] - 0.10) < 1e-9
-        # Day 3: lagged = 100% MSFT → port_ret = +5%
-        assert abs(result.loc[dates[2], "port_return"] - 0.05) < 1e-9
-
-
-# ── compute_returns (portfolio_stats) ─────────────────────────────────────────
+# ── compute_returns (portfolio_metrics — canonical shared function) ────────────
 
 class TestComputeReturns:
-    """Tests the portfolio_stats version of the return computation."""
+    """Tests the shared compute_returns() from portfolio_metrics."""
 
     def _inputs_equal_weights(self):
         dates = pd.date_range("2024-01-02", periods=4, freq="B")
@@ -204,3 +117,93 @@ class TestComputeReturns:
         w, p = self._inputs_equal_weights()
         result = compute_returns(w, p)
         assert len(result) > 0
+
+    def test_100pct_single_stock_port_return_matches_stock(self):
+        """With 100% weight on AAPL, port_return must equal AAPL's daily return."""
+        dates = pd.date_range("2024-01-02", periods=4, freq="B")
+        prices = pd.DataFrame({
+            "AAPL": [100.0, 110.0, 121.0, 133.1],
+            "SPY":  [400.0, 420.0, 441.0, 463.05],
+        }, index=dates)
+        weights = pd.DataFrame({"AAPL": [100.0] * 4}, index=dates)
+        result  = compute_returns(weights, prices)
+        aapl_ret = prices["AAPL"].pct_change().dropna()
+        common   = result.index.intersection(aapl_ret.index)
+        np.testing.assert_allclose(
+            result.loc[common, "port_return"].values,
+            aapl_ret.loc[common].values, rtol=1e-9)
+
+    def test_uses_lagged_weights_not_current(self):
+        """Weights switch from 100% AAPL → 100% MSFT on day 2; day-2 return
+        must use day-1 weight (AAPL)."""
+        dates = pd.date_range("2024-01-02", periods=3, freq="B")
+        prices = pd.DataFrame({
+            "AAPL": [100.0, 110.0, 115.0],
+            "MSFT": [200.0, 200.0, 210.0],
+            "SPY":  [400.0, 402.0, 404.0],
+        }, index=dates)
+        weights = pd.DataFrame({
+            "AAPL": [100.0, 0.0, 0.0],
+            "MSFT": [  0.0, 100.0, 100.0],
+        }, index=dates)
+        result = compute_returns(weights, prices)
+        assert abs(result.loc[dates[1], "port_return"] - 0.10) < 1e-9  # AAPL +10%
+        assert abs(result.loc[dates[2], "port_return"] - 0.05) < 1e-9  # MSFT +5%
+
+    def test_flat_prices_produce_zero_returns(self):
+        dates = pd.date_range("2024-01-02", periods=5, freq="B")
+        prices = pd.DataFrame({
+            "AAPL": [100.0] * 5, "SPY": [400.0] * 5,
+        }, index=dates)
+        weights = pd.DataFrame({"AAPL": [100.0] * 5}, index=dates)
+        result  = compute_returns(weights, prices)
+        assert result["port_return"].abs().max() < 1e-12
+        assert result["active_return"].abs().max() < 1e-12
+
+
+# ── compute_stats (portfolio_metrics) ─────────────────────────────────────────
+
+class TestComputeStats:
+    """Tests the shared compute_stats() from portfolio_metrics."""
+
+    def _returns(self):
+        """Known daily returns: port +10%/day, spy +5%/day → 4 observations."""
+        dates = pd.date_range("2024-01-03", periods=4, freq="B")
+        port  = pd.Series([0.10] * 4, index=dates)
+        spy   = pd.Series([0.05] * 4, index=dates)
+        return pd.DataFrame({
+            "port_return":   port,
+            "spy_return":    spy,
+            "active_return": port - spy,
+        })
+
+    def test_returns_expected_keys(self):
+        st = compute_stats(self._returns())
+        for key in ("ann_return", "ann_spy", "ann_active", "te", "ir",
+                    "vol", "sharpe", "max_dd", "n_days", "start", "end"):
+            assert key in st, f"Missing key: {key}"
+
+    def test_ann_return_geometric(self):
+        """Annualised return = (1.10^4)^(252/4) - 1 = 1.10^252 - 1."""
+        st = compute_stats(self._returns())
+        expected = (1.10 ** 252) - 1
+        np.testing.assert_allclose(st["ann_return"], expected, rtol=1e-9)
+
+    def test_active_return_arithmetic(self):
+        """ann_active = ann_port - ann_spy (arithmetic, not geometric)."""
+        st = compute_stats(self._returns())
+        assert abs(st["ann_active"] - (st["ann_return"] - st["ann_spy"])) < 1e-9
+
+    def test_tracking_error_formula(self):
+        """TE = std(active_return) * sqrt(252). With constant active returns, std=0."""
+        st = compute_stats(self._returns())
+        assert abs(st["te"]) < 1e-12
+
+    def test_max_drawdown_non_positive(self):
+        st = compute_stats(self._returns())
+        assert st["max_dd"] <= 0
+
+    def test_n_days_matches_input(self):
+        ret = self._returns()
+        st  = compute_stats(ret)
+        assert st["n_days"] == len(ret)
