@@ -21,6 +21,8 @@ Run demo from project root:
     py simulations/simple_simulation.py
 """
 
+from __future__ import annotations
+
 import warnings
 from pathlib import Path
 
